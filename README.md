@@ -3,7 +3,7 @@
 Projeto da disciplina de Sistemas Distribuidos.
 
 - Numero da lista: 29
-- Integrantes: Mateus Alves e Mateus Sousa
+- Integrantes: Mateus Alves e Mateus Dodó
 
 ## Sobre a aplicacao
 
