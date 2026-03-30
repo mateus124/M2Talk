@@ -31,3 +31,6 @@ venv/
 *.njsproj
 *.sln
 *.sw?
+
+#extras
+.env
