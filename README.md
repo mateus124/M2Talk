@@ -35,7 +35,7 @@ Ative o ambiente virtual:
 - Linux/macOS:
 
 ```bash
-source venv/bin/activate
+source .venv/bin/activate
 ```
 
 - Windows (PowerShell):
@@ -48,7 +48,7 @@ Instale as dependencias e inicie o servidor:
 
 ```bash
 uv sync
-python src/main.py
+fastapi dev src/main.py
 ```
 
 ## Fluxo principal
