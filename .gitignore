@@ -18,7 +18,6 @@ __pycache__/
 *.py[cod]
 *.pyo
 *.pyd
-__init__.py
 .venv/
 venv/
 
@@ -35,3 +34,4 @@ venv/
 
 #extras
 .env
+app.db
