@@ -1,11 +1,29 @@
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from sockets.ws import websocket_endpoint
-from database import Base, engine
+from database import Base, engine, SessionLocal
 from api import router
-from models import User
+import models
+from services.group_service import GroupService
 
-app = FastAPI(title="M2Talk API", version="1.0.0")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    print("inicializando o banco de dados (é sqlite kk)...")
+    Base.metadata.create_all(bind=engine)
+    db = SessionLocal()
+    try:
+        GroupService.ensure_default_groups(db)
+    finally:
+        db.close()
+    print("banco de dados pronto para uso!!!!!! hehe")
+    yield
+
+
+app = FastAPI(title="M2Talk API", version="1.0.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -14,15 +32,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-@app.on_event("startup")
-def startup_event():
-    print("inicializando o banco de dados (é sqlite kk)...")
-    Base.metadata.create_all(bind=engine)
-    print("banco de dados pronto para uso!!!!!! hehe")
-
-
 @app.get("/ping")
 async def ping():
     return {"message": "server ok"}

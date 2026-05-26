@@ -20,11 +20,12 @@ class UserService:
         return bcrypt.checkpw(password.encode("utf-8"), senha_hash.encode("utf-8"))
 
     @staticmethod
-    def create_access_token(user_id: int, email: str) -> str:
+    def create_access_token(user_id: int, email: str, nome: str) -> str:
         """Cria um JWT token para o usuário."""
         payload = {
             "user_id": user_id,
             "email": email,
+            "nome": nome,
             "exp": datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
         }
         token = jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
@@ -93,7 +94,7 @@ class UserService:
         if not UserService.verify_password(login_data.senha, user.senha_hash):
             raise ValueError("Email ou senha incorretos")
 
-        access_token = UserService.create_access_token(user.id, user.email)
+        access_token = UserService.create_access_token(user.id, user.email, user.nome)
 
         return TokenResponseSchema(
             access_token=access_token,
