@@ -8,7 +8,7 @@ class CreateGroupSchema(BaseModel):
 class GroupResponseSchema(BaseModel):
     id: int
     nome: str
-    created_by_user_id: int
+    created_by_user_id: int | None
 
     class Config:
         from_attributes = True
