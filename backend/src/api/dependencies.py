@@ -1,4 +1,5 @@
-from fastapi import Depends, Header, HTTPException, status
+from fastapi import Depends, HTTPException, Security, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
 from database import get_db
@@ -6,22 +7,20 @@ from repositories.user_repository import UserRepository
 from services.user_service import UserService
 
 
+bearer_scheme = HTTPBearer(auto_error=False, scheme_name="BearerAuth")
+
+
 def get_current_user(
-    authorization: str | None = Header(default=None),
+    credentials: HTTPAuthorizationCredentials | None = Security(bearer_scheme),
     db: Session = Depends(get_db),
 ):
-    if not authorization:
+    if not credentials:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Cabeçalho Authorization não informado",
         )
 
-    scheme, _, token = authorization.partition(" ")
-    if scheme.lower() != "bearer" or not token:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Formato do token inválido",
-        )
+    token = credentials.credentials
 
     payload = UserService.verify_token(token)
     if not payload:
