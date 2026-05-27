@@ -127,7 +127,7 @@ async def send_group_message(
             detail="Usuário precisa entrar no grupo antes de enviar mensagem",
         )
 
-    delivered = await chat_service.send_group_message(participant, member_ids, group_name, payload.message)
+    delivered = await chat_service.send_group_message(db, participant, member_ids, group_name, payload.message)
     return GroupActionResponseSchema(
         detail="Mensagem de grupo enviada",
         group_name=group_name,

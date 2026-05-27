@@ -47,13 +47,13 @@ async def websocket_endpoint(websocket: WebSocket, token: str | None = None):
             recipient_id = content.get("recipient_id")
 
             if action == "broadcast":
-                delivered = await chat_service.send_broadcast_message(participant, message)
+                delivered = await chat_service.send_broadcast_message(db, participant, message)
                 await send_system_message(websocket, f"Broadcast enviado para {delivered} conexões")
             elif action == "private_message":
                 if recipient_id is None:
                     await send_system_message(websocket, "recipient_id é obrigatório")
                     continue
-                delivered = await chat_service.send_private_message(participant, int(recipient_id), message)
+                delivered = await chat_service.send_private_message(db, participant, int(recipient_id), message)
                 await send_system_message(websocket, f"Mensagem privada entregue para {delivered} conexão(ões)")
             elif action == "join_group":
                 try:
@@ -72,7 +72,7 @@ async def websocket_endpoint(websocket: WebSocket, token: str | None = None):
             elif action == "group_message":
                 try:
                     member_ids = GroupService.group_member_ids(db, group_name)
-                    delivered = await chat_service.send_group_message(participant, member_ids, group_name, message)
+                    delivered = await chat_service.send_group_message(db, participant, member_ids, group_name, message)
                     if delivered == 0:
                         await send_system_message(websocket, f"Você precisa entrar no grupo {group_name} antes de enviar mensagem")
                     else:

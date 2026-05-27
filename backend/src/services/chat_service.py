@@ -5,6 +5,9 @@ import json
 from typing import Any
 
 from fastapi import WebSocket
+from sqlalchemy.orm import Session
+
+from repositories.message_repository import MessageRepository
 
 
 @dataclass(frozen=True)
@@ -52,49 +55,111 @@ class ChatService:
             sent += await self._send_to_user(user_id, payload)
         return sent
 
-    async def send_private_message(self, sender: ChatParticipant, recipient_id: int, message: str) -> int:
-        payload = {
-            "type": "private_message",
-            "from": {
-                "user_id": sender.user_id,
-                "nome": sender.nome,
-                "email": sender.email,
-            },
-            "message": message,
-        }
-        return await self._send_to_user(recipient_id, payload)
+    async def send_private_message(
+        self,
+        db: Session,
+        sender: ChatParticipant,
+        recipient_id: int,
+        message: str,
+    ) -> int:
+        saved_message = MessageRepository.create_message(
+            db,
+            message_type="private",
+            sender_id=sender.user_id,
+            recipient_id=recipient_id,
+            content=message,
+        )
 
-    async def send_broadcast_message(self, sender: ChatParticipant, message: str) -> int:
-        payload = {
-            "type": "broadcast",
+        recipient_payload = {
+            "id": saved_message.id,
+            "type": "private",
+            "message": saved_message.content,
+            "timestamp": saved_message.created_at,
             "from": {
                 "user_id": sender.user_id,
                 "nome": sender.nome,
                 "email": sender.email,
             },
-            "message": message,
+            "recipient_id": recipient_id,
+            "conversation_key": f"private:{min(sender.user_id, recipient_id)}:{max(sender.user_id, recipient_id)}",
+            "conversation_name": sender.nome,
+        }
+
+        sender_payload = {
+            **recipient_payload,
+            "conversation_name": (await self._get_user_name(db, recipient_id)) or sender.nome,
+        }
+
+        delivered = await self._send_to_user(recipient_id, recipient_payload)
+        delivered += await self._send_to_user(sender.user_id, sender_payload)
+        return delivered
+
+    async def send_broadcast_message(self, db: Session, sender: ChatParticipant, message: str) -> int:
+        saved_message = MessageRepository.create_message(
+            db,
+            message_type="broadcast",
+            sender_id=sender.user_id,
+            content=message,
+        )
+        payload = {
+            "id": saved_message.id,
+            "type": "broadcast",
+            "message": saved_message.content,
+            "timestamp": saved_message.created_at,
+            "from": {
+                "user_id": sender.user_id,
+                "nome": sender.nome,
+                "email": sender.email,
+            },
+            "conversation_key": "broadcast",
+            "conversation_name": "Broadcast",
         }
         return await self.broadcast(payload)
 
-    async def send_group_message(self, sender: ChatParticipant, member_ids: list[int], group_name: str, message: str) -> int:
+    async def send_group_message(
+        self,
+        db: Session,
+        sender: ChatParticipant,
+        member_ids: list[int],
+        group_name: str,
+        message: str,
+    ) -> int:
         if sender.user_id not in member_ids:
             return 0
 
+        saved_message = MessageRepository.create_message(
+            db,
+            message_type="group",
+            sender_id=sender.user_id,
+            group_name=group_name,
+            content=message,
+        )
         payload = {
-            "type": "group_message",
+            "id": saved_message.id,
+            "type": "group",
             "group_name": group_name,
+            "conversation_key": group_name,
+            "conversation_name": group_name,
+            "timestamp": saved_message.created_at,
             "from": {
                 "user_id": sender.user_id,
                 "nome": sender.nome,
                 "email": sender.email,
             },
-            "message": message,
+            "message": saved_message.content,
         }
 
         sent = 0
         for member_id in member_ids:
             sent += await self._send_to_user(member_id, payload)
         return sent
+
+    @staticmethod
+    async def _get_user_name(db: Session, user_id: int) -> str | None:
+        from repositories.user_repository import UserRepository
+
+        user = UserRepository.get_user_by_id(db, user_id)
+        return user.nome if user else None
 
 
 chat_service = ChatService()
