@@ -94,7 +94,9 @@ export default function App() {
               message,
             ],
           }))
-        } catch {}
+        } catch (error) {
+          console.error("Erro ao processar mensagem WebSocket:", error);
+        }
       }
 
       wsRef.current = socket
@@ -224,7 +226,7 @@ export default function App() {
           method: 'POST',
           headers: { Authorization: `Bearer ${auth.token}` },
         })
-      } catch {}
+      } catch { }
     },
     [auth],
   )
@@ -261,7 +263,7 @@ export default function App() {
         },
         body: JSON.stringify({ recipient_id: active.recipientId, message: text }),
       })
-    } catch {}
+    } catch { }
   }, [active, auth, input])
 
   const handleGroupCreated = useCallback(
@@ -304,7 +306,7 @@ export default function App() {
       }),
   ].filter((conversation) => (conversation.nome || conversation.name).toLowerCase().includes(search.toLowerCase()))
 
-  const activeMessages = active ? messages[active.name] || [] : []
+  const activeMessages = active ? (messages[active.name?.toLowerCase?.()] || messages[active.nome?.toLowerCase?.()] || []) : []
 
   if (!auth) {
     return <AuthScreen onAuth={handleAuth} />

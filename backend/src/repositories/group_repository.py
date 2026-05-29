@@ -58,3 +58,12 @@ class GroupRepository:
     @staticmethod
     def count_members(db: Session, group_id: int) -> int:
         return db.query(GroupMember).filter(GroupMember.group_id == group_id).count()
+
+    @staticmethod
+    def get_user_groups(db: Session, user_id: int) -> list[GroupChat]:
+        return (
+            db.query(GroupChat)
+            .join(GroupMember, GroupChat.id == GroupMember.group_id)
+            .filter(GroupMember.user_id == user_id)
+            .all()
+        )

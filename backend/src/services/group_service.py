@@ -60,3 +60,7 @@ class GroupService:
             raise ValueError(f"Grupo {group_name} não encontrado")
 
         return GroupRepository.count_members(db, group.id)
+
+    @staticmethod
+    def get_user_groups(db: Session, user_id: int):
+        return GroupRepository.get_user_groups(db, user_id)

@@ -11,6 +11,7 @@ from schemas.group import (
 from schemas.chat import GroupMessageSchema
 from services.chat_service import ChatParticipant, chat_service
 from services.group_service import GroupService
+from sockets.ws import manager
 
 
 router = APIRouter(prefix="/api/groups", tags=["groups"])
@@ -28,6 +29,14 @@ async def create_group(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
     member_count = GroupService.group_member_count(db, group.nome)
+
+    # Registrar o WebSocket do usuário no novo grupo (sem chamar accept novamente)
+    user_websockets = chat_service.get_user_websockets(current_user.id)
+    for websocket in user_websockets:
+        try:
+            manager._add_connection(group.nome, websocket)
+        except Exception as e:
+            print(f"Erro ao registrar WebSocket no grupo: {e}")
 
     return GroupActionResponseSchema(
         detail="Grupo criado com sucesso",
@@ -53,6 +62,14 @@ async def join_group(
         member_count = GroupService.group_member_count(db, group_name)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+
+    # Registrar o WebSocket do usuário no grupo (sem chamar accept novamente)
+    user_websockets = chat_service.get_user_websockets(current_user.id)
+    for websocket in user_websockets:
+        try:
+            manager._add_connection(group_name, websocket)
+        except Exception as e:
+            print(f"Erro ao registrar WebSocket no grupo: {e}")
 
     return GroupActionResponseSchema(
         detail="Usuário entrou no grupo",
@@ -111,7 +128,7 @@ async def group_members(group_name: str, db=Depends(get_db)) -> GroupMembersResp
 @router.post("/{group_name}/message", response_model=GroupActionResponseSchema)
 async def send_group_message(
     group_name: str,
-    payload: GroupMessageSchema,
+    message_input: GroupMessageSchema,
     current_user=Depends(get_current_user),
     db=Depends(get_db),
 ) -> GroupActionResponseSchema:
@@ -127,7 +144,19 @@ async def send_group_message(
             detail="Usuário precisa entrar no grupo antes de enviar mensagem",
         )
 
-    delivered = await chat_service.send_group_message(db, participant, member_ids, group_name, payload.message)
+    delivered = await chat_service.send_group_message(db, participant, member_ids, group_name, message_input.message)
+
+    websocket_payload = {
+        "type": "group",
+        "sender_id": current_user.id,
+        "sender_name": current_user.nome,
+        "group_name": group_name,
+        "content": message_input.message, 
+    }
+
+    # Broadcast com registro dinâmico de WebSockets
+    await manager.broadcast_to_group(group_name, websocket_payload, member_ids, db)
+
     return GroupActionResponseSchema(
         detail="Mensagem de grupo enviada",
         group_name=group_name,

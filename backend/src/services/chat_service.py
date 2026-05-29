@@ -35,6 +35,10 @@ class ChatService:
         if not connections:
             del self.active_connections[user_id]
 
+    def get_user_websockets(self, user_id: int) -> list[WebSocket]:
+        """Retorna todos os WebSockets de um usuário"""
+        return list(self.active_connections.get(user_id, set()))
+
 
     async def _send_json(self, websocket: WebSocket, payload: dict[str, Any]) -> None:
         await websocket.send_text(json.dumps(payload, ensure_ascii=False))

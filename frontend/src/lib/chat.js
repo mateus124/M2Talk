@@ -53,7 +53,7 @@ export const normalizeMessage = (message, fallbackKey = 'server') => {
   )
   const senderId = message.from_id ?? message.sender_id ?? senderObject?.user_id ?? senderObject?.id ?? null
   const recipientId = message.recipient_id ?? message.to_id ?? null
-  const conversationKey =
+  const conversationKey = (
     message.conversation_key ||
     message.group_name ||
     message.group ||
@@ -62,6 +62,8 @@ export const normalizeMessage = (message, fallbackKey = 'server') => {
     senderId ||
     senderName ||
     fallbackKey
+
+  )?.toLowerCase();
   const conversationName = message.conversation_name || message.group_name || message.group || senderName
 
   return {
