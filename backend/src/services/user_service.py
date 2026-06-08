@@ -61,6 +61,10 @@ class UserService:
         if existing_user:
             raise ValueError(f"Email {user_data.email} já está registrado")
 
+        existing_username = UserRepository.get_user_by_username(db, user_data.nome)
+        if existing_username:
+            raise ValueError(f"Username {user_data.nome} já está em uso")
+
         senha_hash = UserService.hash_password(user_data.senha)
 
         user = UserRepository.create_user(

@@ -78,7 +78,7 @@ class ChatService:
             "id": saved_message.id,
             "type": "private",
             "message": saved_message.content,
-            "timestamp": saved_message.created_at,
+            "timestamp": saved_message.created_at.isoformat() if hasattr(saved_message.created_at, 'isoformat') else str(saved_message.created_at),
             "from": {
                 "user_id": sender.user_id,
                 "nome": sender.nome,
@@ -109,7 +109,7 @@ class ChatService:
             "id": saved_message.id,
             "type": "broadcast",
             "message": saved_message.content,
-            "timestamp": saved_message.created_at,
+            "timestamp": saved_message.created_at.isoformat() if hasattr(saved_message.created_at, 'isoformat') else str(saved_message.created_at),
             "from": {
                 "user_id": sender.user_id,
                 "nome": sender.nome,
@@ -144,7 +144,7 @@ class ChatService:
             "group_name": group_name,
             "conversation_key": group_name,
             "conversation_name": group_name,
-            "timestamp": saved_message.created_at,
+            "timestamp": saved_message.created_at.isoformat() if hasattr(saved_message.created_at, 'isoformat') else str(saved_message.created_at),
             "from": {
                 "user_id": sender.user_id,
                 "nome": sender.nome,

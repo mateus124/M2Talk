@@ -5,6 +5,10 @@ class CreateGroupSchema(BaseModel):
     nome: str = Field(..., min_length=3, max_length=255, description="Nome do grupo")
 
 
+class AddGroupMemberSchema(BaseModel):
+    username: str = Field(..., min_length=3, max_length=255, description="Username do usuário a ser adicionado")
+
+
 class GroupResponseSchema(BaseModel):
     id: int
     nome: str

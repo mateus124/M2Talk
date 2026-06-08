@@ -7,6 +7,29 @@ from services.chat_service import ChatParticipant, chat_service
 from services.group_service import GroupService
 from services.user_service import UserService
 
+
+async def send_event(websocket: WebSocket, payload: dict) -> None:
+    await websocket.send_text(json.dumps(payload, ensure_ascii=False))
+
+
+async def notify_user(user_id: int, payload: dict) -> int:
+    sent = 0
+    for websocket in chat_service.get_user_websockets(user_id):
+        try:
+            await websocket.send_text(json.dumps(payload, ensure_ascii=False))
+            sent += 1
+        except Exception:
+            chat_service.unregister_connection(websocket, user_id)
+    return sent
+
+
+async def notify_users(user_ids: list[int], payload: dict) -> int:
+    sent = 0
+    for user_id in user_ids:
+        sent += await notify_user(user_id, payload)
+    return sent
+
+
 class ConnectionManager:
     def __init__(self):
         self.active_connections: Dict[str, List[WebSocket]] = {}
@@ -139,8 +162,23 @@ async def websocket_endpoint(websocket: WebSocket, token: str | None = None):
                 try:
                     GroupService.leave_group(db, group_name, user_id)
                     manager.disconnect(group_name, websocket)
-                    member_count = GroupService.group_member_count(db, group_name)
+                    await send_event(websocket, {"type": "group_left", "group_name": group_name})
+                    try:
+                        member_count = GroupService.group_member_count(db, group_name)
+                    except ValueError:
+                        member_count = 0
                     await send_system_message(websocket, f"Saiu do grupo {group_name}. Membros: {member_count}")
+                except ValueError as exc:
+                    await send_system_message(websocket, str(exc))
+            elif action == "invite_user":
+                username = content.get("username") or ""
+                try:
+                    invited_user = GroupService.add_member_to_group(db, group_name, username, user_id)
+                    invited_websockets = chat_service.get_user_websockets(invited_user.id)
+                    for invited_ws in invited_websockets:
+                        manager._add_connection(group_name, invited_ws)
+                        await send_event(invited_ws, {"type": "group_joined", "group_name": group_name})
+                    await send_system_message(websocket, f"Usuário {username} adicionado ao grupo {group_name}")
                 except ValueError as exc:
                     await send_system_message(websocket, str(exc))
             elif action == "group_message":
@@ -154,18 +192,29 @@ async def websocket_endpoint(websocket: WebSocket, token: str | None = None):
                 except ValueError as exc:
                     await send_system_message(websocket, str(exc))
             elif action == "list_groups":
-                groups = GroupService.list_groups(db)
-                await websocket.send_text(json.dumps({"type": "groups", "groups": [{"id": group.id, "nome": group.nome, "created_by_user_id": group.created_by_user_id} for group in groups]}, ensure_ascii=False))
+                groups = GroupService.get_user_groups(db, user_id)
+                await send_event(websocket, {"type": "groups", "groups": [{"id": group.id, "nome": group.nome, "created_by_user_id": group.created_by_user_id} for group in groups]})
             elif action == "group_member_count":
                 try:
                     member_count = GroupService.group_member_count(db, group_name)
-                    await websocket.send_text(json.dumps({"type": "group_member_count", "group_name": group_name, "member_count": member_count}, ensure_ascii=False))
+                    await send_event(websocket, {"type": "group_member_count", "group_name": group_name, "member_count": member_count})
                 except ValueError as exc:
                     await send_system_message(websocket, str(exc))
             elif action == "create_group":
                 try:
                     created_group = GroupService.create_group(db, group_name, user_id)
-                    await websocket.send_text(json.dumps({"type": "group_created", "group_name": created_group.nome}, ensure_ascii=False))
+                    await send_event(websocket, {
+                        "type": "group_created",
+                        "group_name": created_group.nome,
+                        "created_by_user_id": created_group.created_by_user_id,
+                    })
+                except ValueError as exc:
+                    await send_system_message(websocket, str(exc))
+            elif action == "delete_group":
+                try:
+                    deleted_group, member_ids = GroupService.delete_group(db, group_name, user_id)
+                    await notify_users(member_ids, {"type": "group_deleted", "group_name": group_name})
+                    await send_system_message(websocket, f"Grupo {group_name} excluído com sucesso")
                 except ValueError as exc:
                     await send_system_message(websocket, str(exc))
             else:

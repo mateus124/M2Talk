@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from api.dependencies import get_current_user
 from database import get_db
 from schemas.group import (
+    AddGroupMemberSchema,
     CreateGroupSchema,
     GroupActionResponseSchema,
     GroupListResponseSchema,
@@ -46,8 +47,11 @@ async def create_group(
 
 
 @router.get("", response_model=GroupListResponseSchema)
-async def list_groups(db=Depends(get_db)) -> GroupListResponseSchema:
-    groups = GroupService.list_groups(db)
+async def list_groups(
+    current_user=Depends(get_current_user),
+    db=Depends(get_db),
+) -> GroupListResponseSchema:
+    groups = GroupService.get_user_groups(db, current_user.id)
     return GroupListResponseSchema(groups=groups)
 
 
@@ -61,7 +65,7 @@ async def join_group(
         GroupService.join_group(db, group_name, current_user.id)
         member_count = GroupService.group_member_count(db, group_name)
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc))
 
     # Registrar o WebSocket do usuário no grupo (sem chamar accept novamente)
     user_websockets = chat_service.get_user_websockets(current_user.id)
@@ -78,6 +82,47 @@ async def join_group(
     )
 
 
+@router.post("/{group_name}/members", response_model=GroupActionResponseSchema)
+async def add_group_member(
+    group_name: str,
+    payload: AddGroupMemberSchema,
+    current_user=Depends(get_current_user),
+    db=Depends(get_db),
+) -> GroupActionResponseSchema:
+    try:
+        user = GroupService.add_member_to_group(db, group_name, payload.username, current_user.id)
+        member_count = GroupService.group_member_count(db, group_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+
+    return GroupActionResponseSchema(
+        detail=f"Usuário {user.nome} adicionado ao grupo",
+        group_name=group_name,
+        member_count=member_count,
+    )
+
+
+@router.delete("/{group_name}", response_model=GroupActionResponseSchema)
+async def delete_group(
+    group_name: str,
+    current_user=Depends(get_current_user),
+    db=Depends(get_db),
+) -> GroupActionResponseSchema:
+    try:
+        _, member_ids = GroupService.delete_group(db, group_name, current_user.id)
+    except ValueError as exc:
+        message = str(exc)
+        if "não encontrado" in message:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=message)
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=message)
+
+    return GroupActionResponseSchema(
+        detail="Grupo excluído com sucesso",
+        group_name=group_name,
+        member_count=0,
+    )
+
+
 @router.post("/{group_name}/leave", response_model=GroupActionResponseSchema)
 async def leave_group(
     group_name: str,
@@ -86,9 +131,13 @@ async def leave_group(
 ) -> GroupActionResponseSchema:
     try:
         GroupService.leave_group(db, group_name, current_user.id)
-        member_count = GroupService.group_member_count(db, group_name)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+
+    try:
+        member_count = GroupService.group_member_count(db, group_name)
+    except ValueError:
+        member_count = 0
 
     return GroupActionResponseSchema(
         detail="Usuário saiu do grupo",
