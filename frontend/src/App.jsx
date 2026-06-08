@@ -38,6 +38,7 @@ export default function App() {
   const reconnectEnabledRef = useRef(false)
   const connectWSRef = useRef(null)
   const messageListRef = useRef(null)
+
   const clearReconnectTimer = useCallback(() => {
     if (reconnectRef.current) {
       window.clearTimeout(reconnectRef.current)
@@ -72,6 +73,7 @@ export default function App() {
       }
 
       const socket = new WebSocket(`${WS_BASE}/ws?token=${authData.token}`)
+      wsRef.current = socket
 
       socket.onopen = () => setWsStatus(true)
       socket.onerror = () => setWsStatus(false)
@@ -155,11 +157,9 @@ export default function App() {
             }))
           }
         } catch (error) {
-          console.error("Erro ao processar mensagem WebSocket:", error);
+          console.error("Erro ao processar mensagem WebSocket:", error)
         }
       }
-
-      wsRef.current = socket
     },
     [clearReconnectTimer, closeSocket],
   )
@@ -319,7 +319,6 @@ export default function App() {
       try {
         sendWsAction({ action: 'invite_user', group_name: active.name, username: user.nome })
       } catch {
-        // ignore; modal will handle server responses
       }
     },
     [active, auth?.token, sendWsAction],
@@ -332,7 +331,7 @@ export default function App() {
       sendWsAction({ action: 'leave_group', group_name: active.name })
       setActive(null)
     } catch {
-      // ignore
+      
     }
   }, [active, auth?.token, sendWsAction])
 
@@ -343,7 +342,7 @@ export default function App() {
       sendWsAction({ action: 'delete_group', group_name: active.name })
       setActive(null)
     } catch {
-      // ignore
+      
     }
   }, [active, auth?.token, sendWsAction])
 
