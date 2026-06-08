@@ -1,7 +1,6 @@
 import { useState } from 'react'
-import { API_BASE } from '../lib/chat'
 
-export default function NewGroupModal({ token, onClose, onCreated }) {
+export default function NewGroupModal({ token, onClose, onCreated, onSendWsAction }) {
   const [name, setName] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
@@ -18,7 +17,13 @@ export default function NewGroupModal({ token, onClose, onCreated }) {
     setError('')
 
     try {
-      const response = await fetch(`${API_BASE}/api/groups`, {
+      if (typeof onSendWsAction === 'function') {
+        onSendWsAction({ action: 'create_group', group_name: name })
+        onCreated(name)
+        return
+      }
+
+      const response = await fetch(`/api/groups`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

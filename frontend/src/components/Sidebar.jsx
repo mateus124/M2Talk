@@ -11,6 +11,7 @@ export default function Sidebar({
   onSearchChange,
   onSelectConversation,
   onCreateGroup,
+  onSearchUsers,
   onLogout,
 }) {
   return (
@@ -66,7 +67,7 @@ export default function Sidebar({
         )}
       </div>
 
-      <div className="border-t border-white/10 p-3">
+      <div className="border-t border-white/10 p-3 space-y-3">
         <button
           type="button"
           onClick={onCreateGroup}
@@ -74,6 +75,14 @@ export default function Sidebar({
         >
           <FiPlus className="text-base" />
           Novo Grupo
+        </button>
+        <button
+          type="button"
+          onClick={onSearchUsers}
+          className="flex w-full items-center justify-center gap-2 rounded-2xl border border-white/10 bg-slate-900 px-4 py-3 text-sm font-semibold text-slate-100 transition hover:bg-slate-800"
+        >
+          <FiSearch className="text-base" />
+          Buscar usuário
         </button>
       </div>
     </aside>
