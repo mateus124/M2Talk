@@ -77,7 +77,7 @@ export default function AuthScreen({ onAuth }) {
 
       <div className="relative w-full max-w-md rounded-[28px] border border-white/10 bg-slate-950/80 p-8 shadow-2xl shadow-black/40 backdrop-blur-xl sm:p-10">
         <div className="mb-2 text-3xl font-black tracking-tight text-white">
-          Live<span className="text-blue-400">Chat</span>
+          M2<span className="text-blue-400">Talk</span>
         </div>
         <p className="mb-8 text-sm text-slate-400">Sistema de chat em tempo real</p>
 

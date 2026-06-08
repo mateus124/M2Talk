@@ -151,6 +151,24 @@ class Session {
   final String name;
 }
 
+// ─── Models ──────────────────────────────────────────────────────────────────
+
+class UserSearchResult {
+  const UserSearchResult({required this.id, required this.name});
+
+  final int id;
+  final String name;
+
+  factory UserSearchResult.fromJson(Map<String, dynamic> json) {
+    return UserSearchResult(
+      id: json['id'] as int,
+      name: (json['nome'] ?? json['name'] ?? '').toString(),
+    );
+  }
+}
+
+// ─── API Client ───────────────────────────────────────────────────────────────
+
 class ApiClient {
   ApiClient({required this.apiHost, required this.session});
 
@@ -240,6 +258,41 @@ class ApiClient {
     );
   }
 
+  Future<void> addGroupMember(String groupName, String username) async {
+    final res = await http.post(
+      _base.replace(path: '/api/groups/$groupName/members'),
+      headers: _headers,
+      body: jsonEncode({'username': username}),
+    );
+    if (res.statusCode != 200 && res.statusCode != 201) {
+      throw ApiException.fromJson(_decode(res));
+    }
+  }
+
+  Future<void> sendPrivateMessage(int recipientId, String message) async {
+    final res = await http.post(
+      _base.replace(path: '/api/private-chat/message'),
+      headers: _headers,
+      body: jsonEncode({'recipient_id': recipientId, 'message': message}),
+    );
+    if (res.statusCode != 200) throw ApiException.fromJson(_decode(res));
+  }
+
+  Future<List<UserSearchResult>> searchUsers(String username) async {
+    final res = await http.get(
+      _base.replace(
+        path: '/api/users/search',
+        queryParameters: {'username': username},
+      ),
+      headers: _headers,
+    );
+    if (res.statusCode != 200) throw ApiException.fromJson(_decode(res));
+    final list = _decode(res) as List<dynamic>;
+    return list
+        .map((e) => UserSearchResult.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
   static dynamic _decode(http.Response res) {
     if (res.body.isEmpty) return <String, dynamic>{};
     return jsonDecode(utf8.decode(res.bodyBytes));
@@ -294,6 +347,8 @@ class ApiException implements Exception {
   @override
   String toString() => message;
 }
+
+// ─── Server IP Screens ────────────────────────────────────────────────────────
 
 class ServerIpScreen extends StatefulWidget {
   const ServerIpScreen({
@@ -485,6 +540,8 @@ bool _isValidServer(String value) {
   return RegExp(r'^[a-zA-Z0-9.-]+$').hasMatch(input);
 }
 
+// ─── Models ───────────────────────────────────────────────────────────────────
+
 class GroupInfo {
   const GroupInfo({required this.id, required this.name});
 
@@ -504,6 +561,7 @@ class ChatMessage {
     required this.groupName,
     required this.senderName,
     required this.senderId,
+    this.type,
   });
 
   final int? id;
@@ -512,6 +570,17 @@ class ChatMessage {
   final String groupName;
   final String senderName;
   final int? senderId;
+  final String? type;
+
+  bool get isPrivate => type == 'private';
+
+  /// For private messages the conversation key is built from both participant
+  /// IDs so both sides map to the same "thread".
+  String privateKey(int myId) {
+    if (!isPrivate || senderId == null) return groupName;
+    final ids = [myId, senderId!]..sort();
+    return 'private_${ids[0]}_${ids[1]}';
+  }
 
   factory ChatMessage.fromJson(Map<String, dynamic> json) {
     final from = json['from'];
@@ -541,6 +610,7 @@ class ChatMessage {
           : sender['user_id'] is int
           ? sender['user_id'] as int
           : null,
+      type: json['type']?.toString(),
     );
   }
 }
@@ -553,6 +623,8 @@ DateTime parseServerTime(dynamic value) {
   final normalized = hasTimezone ? raw : '${raw}Z';
   return DateTime.tryParse(normalized)?.toLocal() ?? DateTime.now();
 }
+
+// ─── Auth Screen ──────────────────────────────────────────────────────────────
 
 class AuthScreen extends StatefulWidget {
   const AuthScreen({
@@ -709,6 +781,24 @@ class _AuthScreenState extends State<AuthScreen> {
   }
 }
 
+// ─── Chat Shell ───────────────────────────────────────────────────────────────
+
+/// Describes what the main pane is showing.
+sealed class _PaneState {}
+
+class _PaneGroups extends _PaneState {}
+
+class _PaneGroupChat extends _PaneState {
+  _PaneGroupChat(this.group);
+  final GroupInfo group;
+}
+
+class _PanePrivateChat extends _PaneState {
+  _PanePrivateChat({required this.peerId, required this.peerName});
+  final int peerId;
+  final String peerName;
+}
+
 class ChatShell extends StatefulWidget {
   const ChatShell({
     super.key,
@@ -732,7 +822,7 @@ class _ChatShellState extends State<ChatShell> {
   WebSocketChannel? _channel;
   var _groups = <GroupInfo>[];
   var _messages = <ChatMessage>[];
-  GroupInfo? _selected;
+  _PaneState _pane = _PaneGroups();
   var _loading = true;
   var _wsConnected = false;
 
@@ -784,12 +874,24 @@ class _ChatShellState extends State<ChatShell> {
     );
   }
 
-  List<ChatMessage> get _selectedMessages {
-    final group = _selected?.name;
-    if (group == null) return [];
-    return _messages.where((m) => m.groupName == group).toList()
+  List<ChatMessage> _groupMessages(String groupName) {
+    return _messages.where((m) => m.groupName == groupName).toList()
       ..sort((a, b) => a.timestamp.compareTo(b.timestamp));
   }
+
+  /// Returns messages that belong to a private conversation between
+  /// the current user and [peerId].
+  List<ChatMessage> _privateMessages(int peerId) {
+  final myId = widget.session.userId;
+  return _messages.where((m) {
+    if (!m.isPrivate) return false;
+
+    final key = m.privateKey(myId);
+
+    return key.contains(peerId.toString());
+  }).toList()
+    ..sort((a, b) => a.timestamp.compareTo(b.timestamp));
+}
 
   Future<void> _createGroup() async {
     final name = await showDialog<String>(
@@ -805,12 +907,32 @@ class _ChatShellState extends State<ChatShell> {
     }
   }
 
-  Future<void> _send(String text) async {
-    final selected = _selected;
-    if (selected == null || text.trim().isEmpty) return;
+  Future<void> _sendGroupMessage(String text) async {
+    final pane = _pane;
+    if (pane is! _PaneGroupChat || text.trim().isEmpty) return;
     try {
-      await _api.joinGroup(selected.name);
-      await _api.sendGroupMessage(selected.name, text.trim());
+      await _api.joinGroup(pane.group.name);
+      await _api.sendGroupMessage(pane.group.name, text.trim());
+    } catch (error) {
+      _toast(error.toString());
+    }
+  }
+
+  Future<void> _sendPrivateMessage(String text) async {
+    final pane = _pane;
+    if (pane is! _PanePrivateChat || text.trim().isEmpty) return;
+    try {
+      await _api.sendPrivateMessage(pane.peerId, text.trim());
+      // Optimistically add message to local list
+      final optimistic = ChatMessage(
+        message: text.trim(),
+        timestamp: DateTime.now(),
+        groupName: 'private_${widget.session.userId}_${pane.peerId}',
+        senderName: widget.session.name,
+        senderId: widget.session.userId,
+        type: 'private',
+      );
+      setState(() => _messages.add(optimistic));
     } catch (error) {
       _toast(error.toString());
     }
@@ -825,6 +947,28 @@ class _ChatShellState extends State<ChatShell> {
       return current.timestamp.difference(message.timestamp).abs().inSeconds <
           15;
     });
+  }
+
+  void _openUserSearch() async {
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: _panel,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (_) => UserSearchSheet(
+        api: _api,
+        groups: _groups,
+        onPrivateChat: (user) {
+          Navigator.pop(context);
+          setState(() => _pane = _PanePrivateChat(
+                peerId: user.id,
+                peerName: user.name,
+              ));
+        },
+      ),
+    );
   }
 
   void _toast(String message) {
@@ -843,30 +987,390 @@ class _ChatShellState extends State<ChatShell> {
   Widget build(BuildContext context) {
     return Scaffold(
       body: SafeArea(
-        child: _selected == null
-            ? ConversationList(
-                session: widget.session,
-                groups: _groups,
-                messages: _messages,
-                loading: _loading,
-                wsConnected: _wsConnected,
-                apiHost: widget.apiHost,
-                onLogout: widget.onLogout,
-                onChangeServer: widget.onChangeServer,
-                onCreateGroup: _createGroup,
-                onSelect: (group) => setState(() => _selected = group),
-              )
-            : ChatView(
-                session: widget.session,
-                group: _selected!,
-                messages: _selectedMessages,
-                onBack: () => setState(() => _selected = null),
-                onSend: _send,
-              ),
+        child: _buildPane(),
+      ),
+    );
+  }
+
+  Widget _buildPane() {
+    final pane = _pane;
+
+    if (pane is _PaneGroupChat) {
+      return ChatView(
+        session: widget.session,
+        title: pane.group.name,
+        subtitle: 'Grupo',
+        messages: _groupMessages(pane.group.name),
+        onBack: () => setState(() => _pane = _PaneGroups()),
+        onSend: _sendGroupMessage,
+      );
+    }
+
+    if (pane is _PanePrivateChat) {
+      return ChatView(
+        session: widget.session,
+        title: pane.peerName,
+        subtitle: 'Mensagem privada',
+        messages: _privateMessages(pane.peerId),
+        onBack: () => setState(() => _pane = _PaneGroups()),
+        onSend: _sendPrivateMessage,
+        isPrivate: true,
+      );
+    }
+
+    // _PaneGroups
+    return ConversationList(
+      session: widget.session,
+      groups: _groups,
+      messages: _messages,
+      loading: _loading,
+      wsConnected: _wsConnected,
+      apiHost: widget.apiHost,
+      onLogout: widget.onLogout,
+      onChangeServer: widget.onChangeServer,
+      onCreateGroup: _createGroup,
+      onOpenUserSearch: _openUserSearch,
+      onSelectGroup: (group) => setState(() => _pane = _PaneGroupChat(group)),
+      onSelectPrivate: (peerId, peerName) => setState(
+        () => _pane = _PanePrivateChat(peerId: peerId, peerName: peerName),
       ),
     );
   }
 }
+
+// ─── User Search Bottom Sheet ─────────────────────────────────────────────────
+
+class UserSearchSheet extends StatefulWidget {
+  const UserSearchSheet({
+    super.key,
+    required this.api,
+    required this.groups,
+    required this.onPrivateChat,
+  });
+
+  final ApiClient api;
+  final List<GroupInfo> groups;
+  final ValueChanged<UserSearchResult> onPrivateChat;
+
+  @override
+  State<UserSearchSheet> createState() => _UserSearchSheetState();
+}
+
+class _UserSearchSheetState extends State<UserSearchSheet> {
+  final _query = TextEditingController();
+  var _results = <UserSearchResult>[];
+  var _loading = false;
+  String? _error;
+  Timer? _debounce;
+
+  @override
+  void initState() {
+    super.initState();
+    _query.addListener(_onQueryChanged);
+  }
+
+  void _onQueryChanged() {
+    _debounce?.cancel();
+    final text = _query.text.trim();
+    if (text.isEmpty) {
+      setState(() {
+        _results = [];
+        _error = null;
+      });
+      return;
+    }
+    _debounce = Timer(const Duration(milliseconds: 400), () => _search(text));
+  }
+
+  Future<void> _search(String query) async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final results = await widget.api.searchUsers(query);
+      if (mounted) setState(() => _results = results);
+    } catch (e) {
+      if (mounted) setState(() => _error = e.toString());
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _addToGroup(UserSearchResult user) async {
+    if (widget.groups.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Voce nao tem grupos para adicionar.')),
+      );
+      return;
+    }
+
+    final selected = await showDialog<GroupInfo>(
+      context: context,
+      builder: (_) => _GroupPickerDialog(groups: widget.groups),
+    );
+    if (selected == null || !mounted) return;
+
+    try {
+      await widget.api.addGroupMember(selected.name, user.name);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('${user.name} adicionado a ${selected.name}'),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(e.toString())));
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _debounce?.cancel();
+    _query.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return DraggableScrollableSheet(
+      expand: false,
+      initialChildSize: 0.7,
+      maxChildSize: 0.95,
+      minChildSize: 0.4,
+      builder: (context, scrollController) {
+        return Padding(
+          padding: EdgeInsets.only(
+            bottom: MediaQuery.viewInsetsOf(context).bottom,
+          ),
+          child: Column(
+            children: [
+              // Handle
+              Container(
+                margin: const EdgeInsets.only(top: 12, bottom: 8),
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: _border,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 8, 20, 4),
+                child: Row(
+                  children: [
+                    const Text(
+                      'Buscar usuários',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w800,
+                        fontSize: 18,
+                      ),
+                    ),
+                    const Spacer(),
+                    IconButton(
+                      onPressed: () => Navigator.pop(context),
+                      icon: const Icon(Icons.close, color: _muted),
+                    ),
+                  ],
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20),
+                child: AppTextField(
+                  controller: _query,
+                  hint: 'Nome do usuário...',
+                  onChanged: (_) {},
+                ),
+              ),
+              const SizedBox(height: 12),
+              Expanded(
+                child: _buildResults(scrollController),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildResults(ScrollController scrollController) {
+    if (_loading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    if (_error != null) {
+      return Center(
+        child: Text(_error!, style: const TextStyle(color: Colors.redAccent)),
+      );
+    }
+    if (_query.text.trim().isEmpty) {
+      return const Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.person_search, size: 48, color: Color(0xFF25324F)),
+            SizedBox(height: 10),
+            Text(
+              'Digite um nome para buscar',
+              style: TextStyle(color: _muted),
+            ),
+          ],
+        ),
+      );
+    }
+    if (_results.isEmpty) {
+      return const Center(
+        child: Text(
+          'Nenhum usuário encontrado',
+          style: TextStyle(color: _muted),
+        ),
+      );
+    }
+    return ListView.separated(
+      controller: scrollController,
+      padding: const EdgeInsets.fromLTRB(20, 4, 20, 20),
+      itemCount: _results.length,
+      separatorBuilder: (_, _) => const SizedBox(height: 8),
+      itemBuilder: (context, index) {
+        final user = _results[index];
+        return Container(
+          decoration: BoxDecoration(
+            color: _field,
+            border: Border.all(color: _border),
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: ListTile(
+            contentPadding: const EdgeInsets.fromLTRB(14, 6, 8, 6),
+            leading: InitialsAvatar(
+              text: user.name,
+              color: avatarColor(user.name),
+            ),
+            title: Text(
+              user.name,
+              style: const TextStyle(fontWeight: FontWeight.w700),
+            ),
+            subtitle: Text(
+              'ID: ${user.id}',
+              style: const TextStyle(color: _muted, fontSize: 12),
+            ),
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Tooltip(
+                  message: 'Mensagem privada',
+                  child: IconButton(
+                    onPressed: () => widget.onPrivateChat(user),
+                    icon: const Icon(
+                      Icons.chat_bubble_outline,
+                      color: _accent,
+                    ),
+                  ),
+                ),
+                Tooltip(
+                  message: 'Adicionar a grupo',
+                  child: IconButton(
+                    onPressed: () => _addToGroup(user),
+                    icon: const Icon(
+                      Icons.group_add_outlined,
+                      color: _online,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+// ─── Group Picker Dialog ──────────────────────────────────────────────────────
+
+class _GroupPickerDialog extends StatefulWidget {
+  const _GroupPickerDialog({required this.groups});
+
+  final List<GroupInfo> groups;
+
+  @override
+  State<_GroupPickerDialog> createState() => _GroupPickerDialogState();
+}
+
+class _GroupPickerDialogState extends State<_GroupPickerDialog> {
+  GroupInfo? _selected;
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: _panel,
+      title: const Text('Adicionar ao grupo'),
+      content: SizedBox(
+        width: double.maxFinite,
+        child: ListView.separated(
+          shrinkWrap: true,
+          itemCount: widget.groups.length,
+          separatorBuilder: (_, _) => const SizedBox(height: 6),
+          itemBuilder: (context, index) {
+            final group = widget.groups[index];
+            final selected = _selected?.id == group.id;
+            return InkWell(
+              onTap: () => setState(() => _selected = group),
+              borderRadius: BorderRadius.circular(12),
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 12,
+                ),
+                decoration: BoxDecoration(
+                  color: selected ? _accent.withValues(alpha: 0.2) : _field,
+                  border: Border.all(
+                    color: selected ? _accent : _border,
+                  ),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Row(
+                  children: [
+                    InitialsAvatar(
+                      text: group.name,
+                      color: avatarColor(group.name),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        group.name,
+                        style: const TextStyle(fontWeight: FontWeight.w600),
+                      ),
+                    ),
+                    if (selected)
+                      const Icon(Icons.check_circle, color: _accent, size: 20),
+                  ],
+                ),
+              ),
+            );
+          },
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancelar'),
+        ),
+        FilledButton(
+          onPressed: _selected == null
+              ? null
+              : () => Navigator.pop(context, _selected),
+          child: const Text('Adicionar'),
+        ),
+      ],
+    );
+  }
+}
+
+// ─── Conversation List ────────────────────────────────────────────────────────
 
 class ConversationList extends StatefulWidget {
   const ConversationList({
@@ -880,7 +1384,9 @@ class ConversationList extends StatefulWidget {
     required this.onLogout,
     required this.onChangeServer,
     required this.onCreateGroup,
-    required this.onSelect,
+    required this.onOpenUserSearch,
+    required this.onSelectGroup,
+    required this.onSelectPrivate,
   });
 
   final Session session;
@@ -892,14 +1398,48 @@ class ConversationList extends StatefulWidget {
   final VoidCallback onLogout;
   final VoidCallback onChangeServer;
   final VoidCallback onCreateGroup;
-  final ValueChanged<GroupInfo> onSelect;
+  final VoidCallback onOpenUserSearch;
+  final ValueChanged<GroupInfo> onSelectGroup;
+  final void Function(int peerId, String peerName) onSelectPrivate;
 
   @override
   State<ConversationList> createState() => _ConversationListState();
 }
 
-class _ConversationListState extends State<ConversationList> {
+class _ConversationListState extends State<ConversationList>
+    with SingleTickerProviderStateMixin {
   final _search = TextEditingController();
+  late final TabController _tabs;
+
+  @override
+  void initState() {
+    super.initState();
+    _tabs = TabController(length: 2, vsync: this);
+  }
+
+  @override
+  void dispose() {
+    _tabs.dispose();
+    super.dispose();
+  }
+
+  /// Collects distinct private conversations from message history.
+  List<_PrivateThread> _privateThreads() {
+    final myId = widget.session.userId;
+    final threads = <String, _PrivateThread>{};
+
+    for (final m in widget.messages) {
+      if (!m.isPrivate) continue;
+      final peerId = m.senderId == myId ? null : m.senderId;
+      if (peerId == null) continue; // sent by me — need to figure out recipient
+      final key = 'p_$peerId';
+      threads.putIfAbsent(
+        key,
+        () => _PrivateThread(peerId: peerId, peerName: m.senderName),
+      );
+    }
+    return threads.values.toList();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -907,8 +1447,13 @@ class _ConversationListState extends State<ConversationList> {
     final groups = widget.groups
         .where((g) => g.name.toLowerCase().contains(query))
         .toList();
+    final threads = _privateThreads()
+        .where((t) => t.peerName.toLowerCase().contains(query))
+        .toList();
+
     return Column(
       children: [
+        // ── Header ──
         Padding(
           padding: const EdgeInsets.fromLTRB(18, 18, 18, 16),
           child: Row(
@@ -943,12 +1488,20 @@ class _ConversationListState extends State<ConversationList> {
                         const SizedBox(width: 8),
                         Text(
                           widget.wsConnected ? 'Online' : 'Conectado',
-                          style: const TextStyle(color: _online, fontSize: 13),
+                          style: const TextStyle(
+                            color: _online,
+                            fontSize: 13,
+                          ),
                         ),
                       ],
                     ),
                   ],
                 ),
+              ),
+              IconButton(
+                tooltip: 'Buscar usuários',
+                onPressed: widget.onOpenUserSearch,
+                icon: const Icon(Icons.person_search_outlined, color: _muted),
               ),
               IconButton(
                 tooltip: 'Servidor',
@@ -963,6 +1516,7 @@ class _ConversationListState extends State<ConversationList> {
             ],
           ),
         ),
+        // ── Search ──
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 18),
           child: AppTextField(
@@ -971,53 +1525,179 @@ class _ConversationListState extends State<ConversationList> {
             onChanged: (_) => setState(() {}),
           ),
         ),
-        const SizedBox(height: 18),
+        const SizedBox(height: 12),
+        // ── Tabs ──
+        Container(
+          margin: const EdgeInsets.symmetric(horizontal: 18),
+          decoration: BoxDecoration(
+            color: const Color(0xFF141A2C),
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: TabBar(
+            controller: _tabs,
+            labelColor: Colors.white,
+            unselectedLabelColor: _muted,
+            indicator: BoxDecoration(
+              color: _accent,
+              borderRadius: BorderRadius.circular(14),
+              boxShadow: const [
+                BoxShadow(color: Color(0x552F83F7), blurRadius: 14),
+              ],
+            ),
+            indicatorSize: TabBarIndicatorSize.tab,
+            dividerColor: Colors.transparent,
+            tabs: [
+              Tab(
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    const Icon(Icons.group_outlined, size: 16),
+                    const SizedBox(width: 6),
+                    const Text(
+                      'Grupos',
+                      style: TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                  ],
+                ),
+              ),
+              Tab(
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    const Icon(Icons.chat_bubble_outline, size: 16),
+                    const SizedBox(width: 6),
+                    const Text(
+                      'Privadas',
+                      style: TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
+        // ── Tab Content ──
         Expanded(
-          child: widget.loading
-              ? const Center(child: CircularProgressIndicator())
-              : groups.isEmpty
-              ? const Center(
-                  child: Text(
-                    'Nenhuma conversa encontrada',
-                    style: TextStyle(color: _muted),
-                  ),
-                )
-              : ListView.separated(
-                  padding: const EdgeInsets.fromLTRB(18, 10, 18, 18),
-                  itemCount: groups.length,
-                  separatorBuilder: (_, index) => const SizedBox(height: 8),
-                  itemBuilder: (context, index) {
-                    final group = groups[index];
-                    final last =
-                        widget.messages
+          child: TabBarView(
+            controller: _tabs,
+            children: [
+              // Groups tab
+              widget.loading
+                  ? const Center(child: CircularProgressIndicator())
+                  : groups.isEmpty
+                  ? const Center(
+                      child: Text(
+                        'Nenhum grupo encontrado',
+                        style: TextStyle(color: _muted),
+                      ),
+                    )
+                  : ListView.separated(
+                      padding: const EdgeInsets.fromLTRB(18, 4, 18, 18),
+                      itemCount: groups.length,
+                      separatorBuilder: (_, _) => const SizedBox(height: 8),
+                      itemBuilder: (context, index) {
+                        final group = groups[index];
+                        final last = widget.messages
                             .where((m) => m.groupName == group.name)
                             .toList()
                           ..sort((a, b) => b.timestamp.compareTo(a.timestamp));
-                    return ConversationTile(
-                      group: group,
-                      last: last.isEmpty ? null : last.first,
-                      onTap: () => widget.onSelect(group),
-                    );
-                  },
-                ),
+                        return ConversationTile(
+                          title: group.name,
+                          subtitle: last.isEmpty
+                              ? 'Grupo'
+                              : '${last.first.senderName}: ${last.first.message}',
+                          time: last.isEmpty ? null : last.first.timestamp,
+                          onTap: () => widget.onSelectGroup(group),
+                        );
+                      },
+                    ),
+              // Private tab
+              threads.isEmpty
+                  ? Center(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(
+                            Icons.chat_bubble_outline,
+                            size: 48,
+                            color: Color(0xFF25324F),
+                          ),
+                          const SizedBox(height: 10),
+                          const Text(
+                            'Sem conversas privadas',
+                            style: TextStyle(color: _muted),
+                          ),
+                          const SizedBox(height: 16),
+                          TextButton.icon(
+                            onPressed: widget.onOpenUserSearch,
+                            icon: const Icon(Icons.person_search_outlined),
+                            label: const Text('Buscar usuário'),
+                          ),
+                        ],
+                      ),
+                    )
+                  : ListView.separated(
+                      padding: const EdgeInsets.fromLTRB(18, 4, 18, 18),
+                      itemCount: threads.length,
+                      separatorBuilder: (_, _) => const SizedBox(height: 8),
+                      itemBuilder: (context, index) {
+                        final thread = threads[index];
+                        return ConversationTile(
+                          title: thread.peerName,
+                          subtitle: 'Mensagem privada',
+                          time: null,
+                          isPrivate: true,
+                          onTap: () => widget.onSelectPrivate(
+                            thread.peerId,
+                            thread.peerName,
+                          ),
+                        );
+                      },
+                    ),
+            ],
+          ),
         ),
+        // ── Bottom bar ──
         Container(
           padding: const EdgeInsets.all(14),
           decoration: const BoxDecoration(
             border: Border(top: BorderSide(color: Color(0xFF1C2740))),
           ),
-          child: OutlinedButton.icon(
-            onPressed: widget.onCreateGroup,
-            icon: const Icon(Icons.add),
-            label: const Text('Novo Grupo'),
-            style: OutlinedButton.styleFrom(
-              minimumSize: const Size(double.infinity, 50),
-              foregroundColor: const Color(0xFF8BBEFF),
-              side: const BorderSide(color: Color(0xFF1E62BC)),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(16),
+          child: Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: widget.onCreateGroup,
+                  icon: const Icon(Icons.add),
+                  label: const Text('Novo Grupo'),
+                  style: OutlinedButton.styleFrom(
+                    minimumSize: const Size(double.infinity, 50),
+                    foregroundColor: const Color(0xFF8BBEFF),
+                    side: const BorderSide(color: Color(0xFF1E62BC)),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                  ),
+                ),
               ),
-            ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: widget.onOpenUserSearch,
+                  icon: const Icon(Icons.person_search_outlined),
+                  label: const Text('Buscar usuário'),
+                  style: OutlinedButton.styleFrom(
+                    minimumSize: const Size(double.infinity, 50),
+                    foregroundColor: const Color(0xFF88FFCB),
+                    side: const BorderSide(color: Color(0xFF1E7050)),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ),
         ),
       ],
@@ -1025,21 +1705,33 @@ class _ConversationListState extends State<ConversationList> {
   }
 }
 
+class _PrivateThread {
+  const _PrivateThread({required this.peerId, required this.peerName});
+  final int peerId;
+  final String peerName;
+}
+
+// ─── Chat View ────────────────────────────────────────────────────────────────
+
 class ChatView extends StatefulWidget {
   const ChatView({
     super.key,
     required this.session,
-    required this.group,
+    required this.title,
+    required this.subtitle,
     required this.messages,
     required this.onBack,
     required this.onSend,
+    this.isPrivate = false,
   });
 
   final Session session;
-  final GroupInfo group;
+  final String title;
+  final String subtitle;
   final List<ChatMessage> messages;
   final VoidCallback onBack;
   final ValueChanged<String> onSend;
+  final bool isPrivate;
 
   @override
   State<ChatView> createState() => _ChatViewState();
@@ -1047,6 +1739,25 @@ class ChatView extends StatefulWidget {
 
 class _ChatViewState extends State<ChatView> {
   final _input = TextEditingController();
+  final _scroll = ScrollController();
+
+  @override
+  void didUpdateWidget(ChatView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.messages.length != oldWidget.messages.length) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
+    }
+  }
+
+  void _scrollToBottom() {
+    if (_scroll.hasClients) {
+      _scroll.animateTo(
+        _scroll.position.maxScrollExtent,
+        duration: const Duration(milliseconds: 250),
+        curve: Curves.easeOut,
+      );
+    }
+  }
 
   void _send() {
     final text = _input.text;
@@ -1058,6 +1769,7 @@ class _ChatViewState extends State<ChatView> {
   Widget build(BuildContext context) {
     return Column(
       children: [
+        // ── AppBar ──
         Container(
           padding: const EdgeInsets.fromLTRB(8, 10, 14, 10),
           decoration: const BoxDecoration(
@@ -1071,8 +1783,10 @@ class _ChatViewState extends State<ChatView> {
                 icon: const Icon(Icons.arrow_back),
               ),
               InitialsAvatar(
-                text: widget.group.name,
-                color: avatarColor(widget.group.name),
+                text: widget.title,
+                color: widget.isPrivate
+                    ? const Color(0xFF4540A7)
+                    : avatarColor(widget.title),
               ),
               const SizedBox(width: 12),
               Expanded(
@@ -1080,15 +1794,26 @@ class _ChatViewState extends State<ChatView> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      widget.group.name,
+                      widget.title,
                       style: const TextStyle(
                         fontSize: 17,
                         fontWeight: FontWeight.w800,
                       ),
                     ),
-                    const Text(
-                      'Grupo',
-                      style: TextStyle(color: _muted, fontSize: 13),
+                    Row(
+                      children: [
+                        if (widget.isPrivate)
+                          const Icon(
+                            Icons.lock_outline,
+                            size: 11,
+                            color: _muted,
+                          ),
+                        if (widget.isPrivate) const SizedBox(width: 4),
+                        Text(
+                          widget.subtitle,
+                          style: const TextStyle(color: _muted, fontSize: 13),
+                        ),
+                      ],
                     ),
                   ],
                 ),
@@ -1096,10 +1821,12 @@ class _ChatViewState extends State<ChatView> {
             ],
           ),
         ),
+        // ── Messages ──
         Expanded(
           child: widget.messages.isEmpty
-              ? const EmptyChat()
+              ? EmptyChat(isPrivate: widget.isPrivate)
               : ListView.builder(
+                  controller: _scroll,
                   padding: const EdgeInsets.all(16),
                   itemCount: widget.messages.length,
                   itemBuilder: (context, index) {
@@ -1111,6 +1838,7 @@ class _ChatViewState extends State<ChatView> {
                   },
                 ),
         ),
+        // ── Input ──
         Container(
           padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
           decoration: const BoxDecoration(
@@ -1122,7 +1850,9 @@ class _ChatViewState extends State<ChatView> {
               Expanded(
                 child: AppTextField(
                   controller: _input,
-                  hint: 'Digite uma mensagem...',
+                  hint: widget.isPrivate
+                      ? 'Mensagem privada...'
+                      : 'Digite uma mensagem...',
                   onSubmitted: (_) => _send(),
                 ),
               ),
@@ -1142,6 +1872,8 @@ class _ChatViewState extends State<ChatView> {
     );
   }
 }
+
+// ─── Message Bubble ───────────────────────────────────────────────────────────
 
 class MessageBubble extends StatelessWidget {
   const MessageBubble({super.key, required this.message, required this.mine});
@@ -1177,12 +1909,22 @@ class MessageBubble extends StatelessWidget {
               ),
             Text(message.message, style: const TextStyle(fontSize: 15)),
             const SizedBox(height: 4),
-            Text(
-              _formatTime(message.timestamp),
-              style: TextStyle(
-                color: mine ? Colors.white70 : _muted,
-                fontSize: 11,
-              ),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (message.isPrivate)
+                  const Padding(
+                    padding: EdgeInsets.only(right: 4),
+                    child: Icon(Icons.lock_outline, size: 10, color: Colors.white54),
+                  ),
+                Text(
+                  _formatTime(message.timestamp),
+                  style: TextStyle(
+                    color: mine ? Colors.white70 : _muted,
+                    fontSize: 11,
+                  ),
+                ),
+              ],
             ),
           ],
         ),
@@ -1191,17 +1933,23 @@ class MessageBubble extends StatelessWidget {
   }
 }
 
+// ─── Conversation Tile ────────────────────────────────────────────────────────
+
 class ConversationTile extends StatelessWidget {
   const ConversationTile({
     super.key,
-    required this.group,
-    required this.last,
+    required this.title,
+    required this.subtitle,
+    required this.time,
     required this.onTap,
+    this.isPrivate = false,
   });
 
-  final GroupInfo group;
-  final ChatMessage? last;
+  final String title;
+  final String subtitle;
+  final DateTime? time;
   final VoidCallback onTap;
+  final bool isPrivate;
 
   @override
   Widget build(BuildContext context) {
@@ -1212,26 +1960,44 @@ class ConversationTile extends StatelessWidget {
         padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
         child: Row(
           children: [
-            InitialsAvatar(text: group.name, color: avatarColor(group.name)),
+            InitialsAvatar(
+              text: title,
+              color: isPrivate
+                  ? const Color(0xFF4540A7)
+                  : avatarColor(title),
+            ),
             const SizedBox(width: 14),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    group.name,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontWeight: FontWeight.w800,
-                      fontSize: 16,
-                    ),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w800,
+                            fontSize: 16,
+                          ),
+                        ),
+                      ),
+                      if (isPrivate)
+                        const Padding(
+                          padding: EdgeInsets.only(left: 4),
+                          child: Icon(
+                            Icons.lock_outline,
+                            size: 13,
+                            color: _muted,
+                          ),
+                        ),
+                    ],
                   ),
                   const SizedBox(height: 5),
                   Text(
-                    last == null
-                        ? 'Grupo'
-                        : '${last!.senderName}: ${last!.message}',
+                    subtitle,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(color: _muted, fontSize: 13),
@@ -1239,10 +2005,13 @@ class ConversationTile extends StatelessWidget {
                 ],
               ),
             ),
-            if (last != null)
+            if (time != null)
               Text(
-                _formatTime(last!.timestamp),
-                style: const TextStyle(color: Color(0xFF65779C), fontSize: 11),
+                _formatTime(time!),
+                style: const TextStyle(
+                  color: Color(0xFF65779C),
+                  fontSize: 11,
+                ),
               ),
           ],
         ),
@@ -1250,6 +2019,8 @@ class ConversationTile extends StatelessWidget {
     );
   }
 }
+
+// ─── Dialogs ──────────────────────────────────────────────────────────────────
 
 class CreateGroupDialog extends StatefulWidget {
   const CreateGroupDialog({super.key});
@@ -1281,23 +2052,38 @@ class _CreateGroupDialogState extends State<CreateGroupDialog> {
   }
 }
 
+// ─── Empty Chat ───────────────────────────────────────────────────────────────
+
 class EmptyChat extends StatelessWidget {
-  const EmptyChat({super.key});
+  const EmptyChat({super.key, this.isPrivate = false});
+
+  final bool isPrivate;
 
   @override
   Widget build(BuildContext context) {
-    return const Center(
+    return Center(
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(Icons.forum_rounded, size: 48, color: Color(0xFF25324F)),
-          SizedBox(height: 10),
-          Text('Envie a primeira mensagem', style: TextStyle(color: _muted)),
+          Icon(
+            isPrivate ? Icons.lock_outline : Icons.forum_rounded,
+            size: 48,
+            color: const Color(0xFF25324F),
+          ),
+          const SizedBox(height: 10),
+          Text(
+            isPrivate
+                ? 'Envie uma mensagem privada'
+                : 'Envie a primeira mensagem',
+            style: const TextStyle(color: _muted),
+          ),
         ],
       ),
     );
   }
 }
+
+// ─── Shared Widgets ───────────────────────────────────────────────────────────
 
 class LogoTitle extends StatelessWidget {
   const LogoTitle({super.key});
@@ -1307,14 +2093,8 @@ class LogoTitle extends StatelessWidget {
     return const Text.rich(
       TextSpan(
         children: [
-          TextSpan(
-            text: 'Live',
-            style: TextStyle(color: Colors.white),
-          ),
-          TextSpan(
-            text: 'Chat',
-            style: TextStyle(color: _accent),
-          ),
+          TextSpan(text: 'Live', style: TextStyle(color: Colors.white)),
+          TextSpan(text: 'Chat', style: TextStyle(color: _accent)),
         ],
       ),
       style: TextStyle(fontWeight: FontWeight.w900, fontSize: 32),
@@ -1451,6 +2231,8 @@ class InitialsAvatar extends StatelessWidget {
     );
   }
 }
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
 String initials(String text) {
   final parts = text

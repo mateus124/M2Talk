@@ -14,7 +14,6 @@ from services.group_service import GroupService
 async def lifespan(app: FastAPI):
     print("inicializando o banco de dados (é sqlite kk)...")
     Base.metadata.create_all(bind=engine)
-    # Não criar grupos padrão automaticamente
     print("banco de dados pronto para uso!!!!!! hehe")
     yield
 
