@@ -6,6 +6,7 @@ import MessageInput from './components/MessageInput'
 import MessageList from './components/MessageList'
 import NewGroupModal from './components/NewGroupModal'
 import Sidebar from './components/Sidebar'
+import UserSearchModal from './components/UserSearchModal'
 import { API_BASE, WS_BASE, normalizeGroup, normalizeMessage } from './lib/chat'
 
 const AUTH_STORAGE_KEY = 'm2talk-auth'
@@ -29,6 +30,7 @@ export default function App() {
   const [input, setInput] = useState('')
   const [wsStatus, setWsStatus] = useState(false)
   const [showNewGroup, setShowNewGroup] = useState(false)
+  const [showUserSearch, setShowUserSearch] = useState(false)
   const [search, setSearch] = useState('')
 
   const wsRef = useRef(null)
@@ -84,16 +86,74 @@ export default function App() {
       socket.onmessage = (event) => {
         try {
           const payload = JSON.parse(event.data)
-          const message = normalizeMessage(payload)
-          const key = message.conversationKey
 
-          setMessages((previous) => ({
-            ...previous,
-            [key]: [
-              ...(previous[key] || []),
-              message,
-            ],
-          }))
+          if (payload.type === 'groups' && Array.isArray(payload.groups)) {
+            setGroups(payload.groups.map(normalizeGroup).filter(Boolean))
+            return
+          }
+
+          if (payload.type === 'group_created' && payload.group_name) {
+            setGroups((current) => {
+              const exists = current.some((group) => group.name === payload.group_name)
+              if (exists) return current
+              return [...current, normalizeGroup({ id: payload.group_name, nome: payload.group_name, name: payload.group_name })]
+            })
+            void selectConversation({ type: 'group', name: payload.group_name })
+            return
+          }
+
+          if (payload.type === 'group_joined' && payload.group_name) {
+            setGroups((current) => {
+              const exists = current.some((group) => group.name === payload.group_name)
+              if (exists) return current
+              return [...current, normalizeGroup({ id: payload.group_name, nome: payload.group_name, name: payload.group_name })]
+            })
+            return
+          }
+
+          if (payload.type === 'group_deleted' && payload.group_name) {
+            setGroups((current) => current.filter((group) => group.name !== payload.group_name))
+            setMessages((prev) => {
+              const next = { ...prev }
+              delete next[payload.group_name]
+              return next
+            })
+            if (active?.name === payload.group_name) {
+              setActive(null)
+            }
+            return
+          }
+
+          if (payload.type === 'group_left' && payload.group_name) {
+            setGroups((current) => current.filter((group) => group.name !== payload.group_name))
+            setMessages((prev) => {
+              const next = { ...prev }
+              delete next[payload.group_name]
+              return next
+            })
+            if (active?.name === payload.group_name) {
+              setActive(null)
+            }
+            return
+          }
+
+          if (payload.type === 'system') {
+            console.info('Sistema:', payload.message)
+            return
+          }
+
+          if (payload.type === 'group' || payload.type === 'private' || payload.type === 'broadcast' || !payload.type) {
+            const message = normalizeMessage(payload)
+            const key = message.conversationKey
+
+            setMessages((previous) => ({
+              ...previous,
+              [key]: [
+                ...(previous[key] || []),
+                message,
+              ],
+            }))
+          }
         } catch (error) {
           console.error("Erro ao processar mensagem WebSocket:", error);
         }
@@ -103,6 +163,15 @@ export default function App() {
     },
     [clearReconnectTimer, closeSocket],
   )
+
+  const sendWsAction = useCallback((payload) => {
+    const socket = wsRef.current
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+      throw new Error('WebSocket não está conectado')
+    }
+
+    socket.send(JSON.stringify(payload))
+  }, [])
 
   const fetchGroups = useCallback(async (token) => {
     if (!token) return
@@ -193,6 +262,7 @@ export default function App() {
       setInput('')
       setSearch('')
       setShowNewGroup(false)
+      setShowUserSearch(false)
     },
     [],
   )
@@ -213,25 +283,71 @@ export default function App() {
     setInput('')
     setSearch('')
     setShowNewGroup(false)
+    setShowUserSearch(false)
   }, [clearReconnectTimer, closeSocket])
 
   const selectConversation = useCallback(
-    async (conversation) => {
+    (conversation) => {
       setActive(conversation)
-
-      if (conversation.type !== 'group' || !auth?.token) return
-
-      try {
-        await fetch(`${API_BASE}/api/groups/${conversation.name}/join`, {
-          method: 'POST',
-          headers: { Authorization: `Bearer ${auth.token}` },
-        })
-      } catch { }
     },
-    [auth],
+    [],
   )
 
-  const sendMessage = useCallback(async () => {
+  const handleOpenDirectMessage = useCallback(
+    (user) => {
+      if (!auth?.userId || !user?.id) return
+
+      const me = Number(auth.userId)
+      const target = Number(user.id)
+      const name = `private:${Math.min(me, target)}:${Math.max(me, target)}`
+
+      setActive({
+        type: 'dm',
+        name,
+        nome: user.nome,
+        recipientId: target,
+      })
+      setShowUserSearch(false)
+    },
+    [auth?.userId],
+  )
+
+  const handleAddUserToGroup = useCallback(
+    async (user) => {
+      if (!auth?.token || !active?.type || active.type !== 'group') return
+
+      try {
+        sendWsAction({ action: 'invite_user', group_name: active.name, username: user.nome })
+      } catch {
+        // ignore; modal will handle server responses
+      }
+    },
+    [active, auth?.token, sendWsAction],
+  )
+
+  const handleLeaveGroup = useCallback(() => {
+    if (!active?.type || active.type !== 'group' || !auth?.token) return
+
+    try {
+      sendWsAction({ action: 'leave_group', group_name: active.name })
+      setActive(null)
+    } catch {
+      // ignore
+    }
+  }, [active, auth?.token, sendWsAction])
+
+  const handleDeleteGroup = useCallback(() => {
+    if (!active?.type || active.type !== 'group' || !auth?.token) return
+
+    try {
+      sendWsAction({ action: 'delete_group', group_name: active.name })
+      setActive(null)
+    } catch {
+      // ignore
+    }
+  }, [active, auth?.token, sendWsAction])
+
+  const sendMessage = useCallback(() => {
     const text = input.trim()
 
     if (!text || !active || !auth) return
@@ -240,14 +356,7 @@ export default function App() {
 
     try {
       if (active.type === 'group') {
-        await fetch(`${API_BASE}/api/groups/${active.name}/message`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${auth.token}`,
-          },
-          body: JSON.stringify({ message: text }),
-        })
+        sendWsAction({ action: 'group_message', group_name: active.name, message: text })
         return
       }
 
@@ -255,16 +364,9 @@ export default function App() {
         return
       }
 
-      await fetch(`${API_BASE}/api/private-chat/message`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${auth.token}`,
-        },
-        body: JSON.stringify({ recipient_id: active.recipientId, message: text }),
-      })
+      sendWsAction({ action: 'private_message', recipient_id: active.recipientId, message: text })
     } catch { }
-  }, [active, auth, input])
+  }, [active, auth, input, sendWsAction])
 
   const handleGroupCreated = useCallback(
     async (name) => {
@@ -305,8 +407,19 @@ export default function App() {
         }
       }),
   ].filter((conversation) => (conversation.nome || conversation.name).toLowerCase().includes(search.toLowerCase()))
+  .sort((left, right) => {
+    const leftTime = left.lastMessage?.time ?? ''
+    const rightTime = right.lastMessage?.time ?? ''
 
-  const activeMessages = active ? (messages[active.name?.toLowerCase?.()] || messages[active.nome?.toLowerCase?.()] || []) : []
+    if (!leftTime && !rightTime) return 0
+    if (!leftTime) return 1
+    if (!rightTime) return -1
+    return rightTime.localeCompare(leftTime)
+  })
+
+  const activeMessages = active
+    ? (messages[active.name] || messages[active.nome] || [])
+    : []
 
   if (!auth) {
     return <AuthScreen onAuth={handleAuth} />
@@ -322,13 +435,20 @@ export default function App() {
         onSearchChange={setSearch}
         onSelectConversation={selectConversation}
         onCreateGroup={() => setShowNewGroup(true)}
+        onSearchUsers={() => setShowUserSearch(true)}
         onLogout={handleLogout}
       />
 
       <main className="flex min-w-0 flex-1 flex-col bg-slate-950">
         {active ? (
           <>
-            <ChatHeader active={active} wsStatus={wsStatus} />
+            <ChatHeader
+              active={active}
+              wsStatus={wsStatus}
+              onLeaveGroup={handleLeaveGroup}
+              onDeleteGroup={handleDeleteGroup}
+              canDeleteGroup={active?.type === 'group' && active?.created_by_user_id === auth.userId}
+            />
 
             <MessageList messages={activeMessages} currentUsername={auth.nome || auth.username || auth.email} listRef={messageListRef} />
 
@@ -349,6 +469,18 @@ export default function App() {
           token={auth.token}
           onClose={() => setShowNewGroup(false)}
           onCreated={handleGroupCreated}
+          onSendWsAction={sendWsAction}
+        />
+      ) : null}
+
+      {showUserSearch ? (
+        <UserSearchModal
+          auth={auth}
+          sendWsAction={sendWsAction}
+          groupName={active?.type === 'group' ? active.name : null}
+          onClose={() => setShowUserSearch(false)}
+          onOpenConversation={handleOpenDirectMessage}
+          onAddToGroup={handleAddUserToGroup}
         />
       ) : null}
     </div>
