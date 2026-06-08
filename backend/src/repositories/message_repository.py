@@ -85,7 +85,7 @@ class MessageRepository:
                     "id": message.id,
                     "type": message.message_type,
                     "message": message.content,
-                    "timestamp": message.created_at,
+                    "timestamp": message.created_at.isoformat() if hasattr(message.created_at, 'isoformat') else str(message.created_at),
                     "from": {
                         "user_id": message.sender_id,
                         "nome": sender_name,

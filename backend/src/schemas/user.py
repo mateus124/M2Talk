@@ -18,6 +18,14 @@ class UserResponseSchema(BaseModel):
         from_attributes = True
 
 
+class UserSearchResponseSchema(BaseModel):
+    id: int
+    nome: str
+
+    class Config:
+        from_attributes = True
+
+
 class LoginSchema(BaseModel):
     email: EmailStr = Field(..., description="Email do usuário")
     senha: str = Field(..., description="Senha do usuário")

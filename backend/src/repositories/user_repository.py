@@ -18,6 +18,17 @@ class UserRepository:
         return db.query(User).filter(User.email == email).first()
 
     @staticmethod
+    def get_user_by_username(db: Session, username: str) -> User | None:
+        """Busca um usuário pelo nome de usuário."""
+        return db.query(User).filter(User.nome == username).first()
+
+    @staticmethod
+    def search_users_by_username(db: Session, username: str) -> list[User]:
+        """Busca usuários pelo nome de usuário, correspondência parcial."""
+        pattern = f"%{username}%"
+        return db.query(User).filter(User.nome.ilike(pattern)).order_by(User.nome.asc()).all()
+
+    @staticmethod
     def get_user_by_id(db: Session, user_id: int) -> User | None:
         """Busca um usuário pelo ID."""
         return db.query(User).filter(User.id == user_id).first()

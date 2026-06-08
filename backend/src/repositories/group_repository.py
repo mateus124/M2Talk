@@ -37,6 +37,28 @@ class GroupRepository:
         return member
 
     @staticmethod
+    def is_member(db: Session, group_id: int, user_id: int) -> bool:
+        return (
+            db.query(GroupMember)
+            .filter(GroupMember.group_id == group_id, GroupMember.user_id == user_id)
+            .first()
+            is not None
+        )
+
+    @staticmethod
+    def delete_group(db: Session, group_id: int) -> list[int]:
+        member_ids = [user_id for (user_id,) in db.query(GroupMember.user_id).filter(GroupMember.group_id == group_id).all()]
+        db.query(GroupMember).filter(GroupMember.group_id == group_id).delete(synchronize_session=False)
+        group = db.query(GroupChat).filter(GroupChat.id == group_id).first()
+        if not group:
+            db.commit()
+            return member_ids
+
+        db.delete(group)
+        db.commit()
+        return member_ids
+
+    @staticmethod
     def remove_member(db: Session, group_id: int, user_id: int) -> bool:
         member = (
             db.query(GroupMember)
