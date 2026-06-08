@@ -12,10 +12,11 @@ void main() {
   runApp(const M2TalkApp());
 }
 
-const String apiHost = String.fromEnvironment(
-  'API_HOST',
-  defaultValue: '10.0.2.2:8000',
+const String defaultApiIp = String.fromEnvironment(
+  'API_IP',
+  defaultValue: '10.0.2.2',
 );
+const int apiPort = 8000;
 
 const _bg = Color(0xFF050917);
 const _panel = Color(0xFF080D1D);
@@ -56,6 +57,7 @@ class AppGate extends StatefulWidget {
 
 class _AppGateState extends State<AppGate> {
   Session? _session;
+  String? _apiIp;
   var _loading = true;
 
   @override
@@ -69,7 +71,9 @@ class _AppGateState extends State<AppGate> {
     final token = prefs.getString('token');
     final userId = prefs.getInt('userId');
     final name = prefs.getString('name');
+    final apiIp = prefs.getString('apiIp');
     setState(() {
+      _apiIp = apiIp;
       _session = token != null && userId != null && name != null
           ? Session(token: token, userId: userId, name: name)
           : null;
@@ -85,9 +89,27 @@ class _AppGateState extends State<AppGate> {
     setState(() => _session = session);
   }
 
+  Future<void> _setApiIp(String ip) async {
+    final normalized = ip.trim();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('apiIp', normalized);
+    setState(() => _apiIp = normalized);
+  }
+
+  Future<void> _changeApiIp() async {
+    final nextIp = await showDialog<String>(
+      context: context,
+      builder: (_) => ServerIpDialog(initialIp: _apiIp ?? defaultApiIp),
+    );
+    if (nextIp == null || nextIp.trim().isEmpty) return;
+    await _setApiIp(nextIp);
+  }
+
   Future<void> _logout() async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.clear();
+    await prefs.remove('token');
+    await prefs.remove('userId');
+    await prefs.remove('name');
     setState(() => _session = null);
   }
 
@@ -96,9 +118,24 @@ class _AppGateState extends State<AppGate> {
     if (_loading) {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
+    final apiIp = _apiIp;
+    if (apiIp == null || apiIp.isEmpty) {
+      return ServerIpScreen(initialIp: defaultApiIp, onSave: _setApiIp);
+    }
     return _session == null
-        ? AuthScreen(onAuthenticated: _setSession)
-        : ChatShell(session: _session!, onLogout: _logout);
+        ? AuthScreen(
+            key: ValueKey('auth-$apiIp'),
+            apiHost: '$apiIp:$apiPort',
+            onAuthenticated: _setSession,
+            onChangeServer: _changeApiIp,
+          )
+        : ChatShell(
+            key: ValueKey('chat-$apiIp'),
+            apiHost: '$apiIp:$apiPort',
+            session: _session!,
+            onLogout: _logout,
+            onChangeServer: _changeApiIp,
+          );
   }
 }
 
@@ -115,18 +152,19 @@ class Session {
 }
 
 class ApiClient {
-  ApiClient({required this.session});
+  ApiClient({required this.apiHost, required this.session});
 
+  final String apiHost;
   final Session? session;
-  static final _base = Uri.parse('http://$apiHost');
-  static final _wsBase = Uri.parse('ws://$apiHost');
+  Uri get _base => Uri.parse('http://$apiHost');
+  Uri get _wsBase => Uri.parse('ws://$apiHost');
 
   Map<String, String> get _headers => {
     'Content-Type': 'application/json',
     if (session != null) 'Authorization': 'Bearer ${session!.token}',
   };
 
-  static Future<Session> login(String email, String password) async {
+  Future<Session> login(String email, String password) async {
     final res = await http.post(
       _base.replace(path: '/api/auth/login'),
       headers: {'Content-Type': 'application/json'},
@@ -141,11 +179,7 @@ class ApiClient {
     );
   }
 
-  static Future<void> register(
-    String name,
-    String email,
-    String password,
-  ) async {
+  Future<void> register(String name, String email, String password) async {
     final res = await http.post(
       _base.replace(path: '/api/auth/register'),
       headers: {'Content-Type': 'application/json'},
@@ -261,6 +295,196 @@ class ApiException implements Exception {
   String toString() => message;
 }
 
+class ServerIpScreen extends StatefulWidget {
+  const ServerIpScreen({
+    super.key,
+    required this.initialIp,
+    required this.onSave,
+  });
+
+  final String initialIp;
+  final ValueChanged<String> onSave;
+
+  @override
+  State<ServerIpScreen> createState() => _ServerIpScreenState();
+}
+
+class _ServerIpScreenState extends State<ServerIpScreen> {
+  late final TextEditingController _ip;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _ip = TextEditingController(text: widget.initialIp);
+  }
+
+  void _save() {
+    final value = _ip.text.trim();
+    if (!_isValidServer(value)) {
+      setState(() => _error = 'Informe um IP valido, como 192.168.100.24');
+      return;
+    }
+    widget.onSave(value);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: Container(
+        decoration: const BoxDecoration(
+          gradient: RadialGradient(
+            center: Alignment.bottomRight,
+            radius: 1.2,
+            colors: [Color(0xFF062737), _bg],
+          ),
+        ),
+        child: SafeArea(
+          child: Center(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(24),
+              child: Container(
+                width: double.infinity,
+                constraints: const BoxConstraints(maxWidth: 420),
+                padding: const EdgeInsets.all(28),
+                decoration: BoxDecoration(
+                  color: _panel,
+                  border: Border.all(color: const Color(0xFF1E2944)),
+                  borderRadius: BorderRadius.circular(28),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const LogoTitle(),
+                    const SizedBox(height: 10),
+                    const Text(
+                      'Conectar ao servidor',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w800,
+                        fontSize: 20,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    const Text(
+                      'Digite o IP do computador onde o backend esta rodando.',
+                      style: TextStyle(color: _muted, fontSize: 14),
+                    ),
+                    const SizedBox(height: 24),
+                    AppTextField(
+                      controller: _ip,
+                      hint: '192.168.100.24',
+                      keyboardType: TextInputType.url,
+                      onSubmitted: (_) => _save(),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      _error ?? 'Porta usada: $apiPort',
+                      style: TextStyle(
+                        color: _error == null ? _muted : Colors.redAccent,
+                        fontSize: 12,
+                      ),
+                    ),
+                    const SizedBox(height: 18),
+                    FilledButton.icon(
+                      onPressed: _save,
+                      icon: const Icon(Icons.check),
+                      label: const Text('Salvar servidor'),
+                      style: FilledButton.styleFrom(
+                        minimumSize: const Size(double.infinity, 52),
+                        backgroundColor: _accent,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class ServerIpDialog extends StatefulWidget {
+  const ServerIpDialog({super.key, required this.initialIp});
+
+  final String initialIp;
+
+  @override
+  State<ServerIpDialog> createState() => _ServerIpDialogState();
+}
+
+class _ServerIpDialogState extends State<ServerIpDialog> {
+  late final TextEditingController _ip;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _ip = TextEditingController(text: widget.initialIp);
+  }
+
+  void _save() {
+    final value = _ip.text.trim();
+    if (!_isValidServer(value)) {
+      setState(() => _error = 'IP invalido');
+      return;
+    }
+    Navigator.pop(context, value);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: _panel,
+      title: const Text('Servidor'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          AppTextField(
+            controller: _ip,
+            hint: '192.168.100.24',
+            keyboardType: TextInputType.url,
+            onSubmitted: (_) => _save(),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            _error ?? 'Porta usada: $apiPort',
+            style: TextStyle(
+              color: _error == null ? _muted : Colors.redAccent,
+              fontSize: 12,
+            ),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancelar'),
+        ),
+        FilledButton(onPressed: _save, child: const Text('Salvar')),
+      ],
+    );
+  }
+}
+
+bool _isValidServer(String value) {
+  final input = value.trim();
+  if (input.isEmpty || input.contains(':') || input.contains('/')) return false;
+  final ipv4 = RegExp(r'^(\d{1,3}\.){3}\d{1,3}$');
+  if (ipv4.hasMatch(input)) {
+    return input.split('.').every((part) {
+      final number = int.tryParse(part);
+      return number != null && number >= 0 && number <= 255;
+    });
+  }
+  return RegExp(r'^[a-zA-Z0-9.-]+$').hasMatch(input);
+}
+
 class GroupInfo {
   const GroupInfo({required this.id, required this.name});
 
@@ -274,6 +498,7 @@ class GroupInfo {
 
 class ChatMessage {
   ChatMessage({
+    this.id,
     required this.message,
     required this.timestamp,
     required this.groupName,
@@ -281,6 +506,7 @@ class ChatMessage {
     required this.senderId,
   });
 
+  final int? id;
   final String message;
   final DateTime timestamp;
   final String groupName;
@@ -296,11 +522,10 @@ class ChatMessage {
         json['conversation_key'] ??
         'Grupo';
     return ChatMessage(
+      id: json['id'] is int ? json['id'] as int : null,
       message: (json['message'] ?? json['content'] ?? json['text'] ?? '')
           .toString(),
-      timestamp:
-          DateTime.tryParse((json['timestamp'] ?? '').toString()) ??
-          DateTime.now(),
+      timestamp: parseServerTime(json['timestamp']),
       groupName: group.toString(),
       senderName:
           (json['sender_name'] ??
@@ -320,10 +545,26 @@ class ChatMessage {
   }
 }
 
-class AuthScreen extends StatefulWidget {
-  const AuthScreen({super.key, required this.onAuthenticated});
+DateTime parseServerTime(dynamic value) {
+  final raw = value?.toString().trim();
+  if (raw == null || raw.isEmpty) return DateTime.now();
+  final hasTimezone =
+      raw.endsWith('Z') || RegExp(r'[+-]\d{2}:?\d{2}$').hasMatch(raw);
+  final normalized = hasTimezone ? raw : '${raw}Z';
+  return DateTime.tryParse(normalized)?.toLocal() ?? DateTime.now();
+}
 
+class AuthScreen extends StatefulWidget {
+  const AuthScreen({
+    super.key,
+    required this.apiHost,
+    required this.onAuthenticated,
+    required this.onChangeServer,
+  });
+
+  final String apiHost;
   final ValueChanged<Session> onAuthenticated;
+  final VoidCallback onChangeServer;
 
   @override
   State<AuthScreen> createState() => _AuthScreenState();
@@ -333,20 +574,27 @@ class _AuthScreenState extends State<AuthScreen> {
   final _name = TextEditingController();
   final _email = TextEditingController();
   final _password = TextEditingController();
+  late final ApiClient _api;
   var _register = false;
   var _loading = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _api = ApiClient(apiHost: widget.apiHost, session: null);
+  }
 
   Future<void> _submit() async {
     setState(() => _loading = true);
     try {
       if (_register) {
-        await ApiClient.register(
+        await _api.register(
           _name.text.trim(),
           _email.text.trim(),
           _password.text,
         );
       }
-      final session = await ApiClient.login(_email.text.trim(), _password.text);
+      final session = await _api.login(_email.text.trim(), _password.text);
       widget.onAuthenticated(session);
     } catch (error) {
       _toast(error.toString());
@@ -388,11 +636,29 @@ class _AuthScreenState extends State<AuthScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const LogoTitle(),
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Expanded(child: LogoTitle()),
+                        IconButton(
+                          tooltip: 'Servidor',
+                          onPressed: widget.onChangeServer,
+                          icon: const Icon(Icons.dns_outlined, color: _muted),
+                        ),
+                      ],
+                    ),
                     const SizedBox(height: 8),
                     const Text(
                       'Sistema de chat em tempo real',
                       style: TextStyle(color: _muted, fontSize: 15),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      widget.apiHost,
+                      style: const TextStyle(
+                        color: Color(0xFF627394),
+                        fontSize: 12,
+                      ),
                     ),
                     const SizedBox(height: 32),
                     SegmentedToggle(
@@ -444,10 +710,18 @@ class _AuthScreenState extends State<AuthScreen> {
 }
 
 class ChatShell extends StatefulWidget {
-  const ChatShell({super.key, required this.session, required this.onLogout});
+  const ChatShell({
+    super.key,
+    required this.apiHost,
+    required this.session,
+    required this.onLogout,
+    required this.onChangeServer,
+  });
 
+  final String apiHost;
   final Session session;
   final VoidCallback onLogout;
+  final VoidCallback onChangeServer;
 
   @override
   State<ChatShell> createState() => _ChatShellState();
@@ -465,7 +739,7 @@ class _ChatShellState extends State<ChatShell> {
   @override
   void initState() {
     super.initState();
-    _api = ApiClient(session: widget.session);
+    _api = ApiClient(apiHost: widget.apiHost, session: widget.session);
     _load();
     _connectWs();
   }
@@ -495,18 +769,9 @@ class _ChatShellState extends State<ChatShell> {
           final data = jsonDecode(event.toString());
           if (data is Map<String, dynamic>) {
             final message = ChatMessage.fromJson(data);
-            final duplicated = _messages.any(
-              (current) =>
-                  current.groupName == message.groupName &&
-                  current.senderId == message.senderId &&
-                  current.message == message.message &&
-                  current.timestamp
-                          .difference(message.timestamp)
-                          .abs()
-                          .inSeconds <
-                      3,
-            );
-            if (!duplicated) setState(() => _messages.add(message));
+            if (!_hasMessage(message)) {
+              setState(() => _messages.add(message));
+            }
           }
         } catch (_) {}
       },
@@ -546,20 +811,20 @@ class _ChatShellState extends State<ChatShell> {
     try {
       await _api.joinGroup(selected.name);
       await _api.sendGroupMessage(selected.name, text.trim());
-      setState(() {
-        _messages.add(
-          ChatMessage(
-            message: text.trim(),
-            timestamp: DateTime.now(),
-            groupName: selected.name,
-            senderName: widget.session.name,
-            senderId: widget.session.userId,
-          ),
-        );
-      });
     } catch (error) {
       _toast(error.toString());
     }
+  }
+
+  bool _hasMessage(ChatMessage message) {
+    return _messages.any((current) {
+      if (message.id != null && current.id == message.id) return true;
+      if (current.groupName != message.groupName) return false;
+      if (current.senderId != message.senderId) return false;
+      if (current.message != message.message) return false;
+      return current.timestamp.difference(message.timestamp).abs().inSeconds <
+          15;
+    });
   }
 
   void _toast(String message) {
@@ -585,7 +850,9 @@ class _ChatShellState extends State<ChatShell> {
                 messages: _messages,
                 loading: _loading,
                 wsConnected: _wsConnected,
+                apiHost: widget.apiHost,
                 onLogout: widget.onLogout,
+                onChangeServer: widget.onChangeServer,
                 onCreateGroup: _createGroup,
                 onSelect: (group) => setState(() => _selected = group),
               )
@@ -609,7 +876,9 @@ class ConversationList extends StatefulWidget {
     required this.messages,
     required this.loading,
     required this.wsConnected,
+    required this.apiHost,
     required this.onLogout,
+    required this.onChangeServer,
     required this.onCreateGroup,
     required this.onSelect,
   });
@@ -619,7 +888,9 @@ class ConversationList extends StatefulWidget {
   final List<ChatMessage> messages;
   final bool loading;
   final bool wsConnected;
+  final String apiHost;
   final VoidCallback onLogout;
+  final VoidCallback onChangeServer;
   final VoidCallback onCreateGroup;
   final ValueChanged<GroupInfo> onSelect;
 
@@ -678,6 +949,11 @@ class _ConversationListState extends State<ConversationList> {
                     ),
                   ],
                 ),
+              ),
+              IconButton(
+                tooltip: 'Servidor',
+                onPressed: widget.onChangeServer,
+                icon: const Icon(Icons.dns_outlined, color: _muted),
               ),
               IconButton(
                 tooltip: 'Sair',
@@ -1111,6 +1387,7 @@ class AppTextField extends StatelessWidget {
     required this.controller,
     required this.hint,
     this.obscure = false,
+    this.keyboardType,
     this.onSubmitted,
     this.onChanged,
   });
@@ -1118,6 +1395,7 @@ class AppTextField extends StatelessWidget {
   final TextEditingController controller;
   final String hint;
   final bool obscure;
+  final TextInputType? keyboardType;
   final ValueChanged<String>? onSubmitted;
   final ValueChanged<String>? onChanged;
 
@@ -1126,6 +1404,7 @@ class AppTextField extends StatelessWidget {
     return TextField(
       controller: controller,
       obscureText: obscure,
+      keyboardType: keyboardType,
       onSubmitted: onSubmitted,
       onChanged: onChanged,
       style: const TextStyle(color: Colors.white),

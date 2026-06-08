@@ -195,17 +195,6 @@ async def send_group_message(
 
     delivered = await chat_service.send_group_message(db, participant, member_ids, group_name, message_input.message)
 
-    websocket_payload = {
-        "type": "group",
-        "sender_id": current_user.id,
-        "sender_name": current_user.nome,
-        "group_name": group_name,
-        "content": message_input.message, 
-    }
-
-    # Broadcast com registro dinâmico de WebSockets
-    await manager.broadcast_to_group(group_name, websocket_payload, member_ids, db)
-
     return GroupActionResponseSchema(
         detail="Mensagem de grupo enviada",
         group_name=group_name,
