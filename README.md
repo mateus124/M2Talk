@@ -73,7 +73,7 @@ uv sync
 fastapi dev src/main.py --host 0.0.0.0 --port 8000
 ```
 
-App Mobile (Flutter):
+- App Mobile (Flutter):
 
 ```bash
 cd flutter_application
