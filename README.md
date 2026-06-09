@@ -13,6 +13,18 @@ O M2Talk e uma aplicacao de chat em tempo real com suporte a:
 - Conversas em grupo
 - Sincronizacao de mensagens via WebSocket
 
+## Arquitetura do projeto
+
+A aplicação é composta por três principais camadas:
+
+- Backend: Desenvolvido em Python com FastAPI, responsável pela autenticação, gerenciamento de usuários, persistência de dados e comunicação em tempo real via WebSocket.
+
+- Frontend: Construído em React + Vite, fornece a interface web para interação com o sistema.
+
+- App Mobile: Desenvolvido em Flutter, oferece uma experiência nativa para dispositivos móveis, integrando-se ao backend via API e WebSocket.
+
+Essa arquitetura garante escalabilidade, modularidade e suporte multiplataforma.
+
 ## Como executar
 
 ### Frontend (React)
@@ -44,12 +56,31 @@ source .venv/bin/activate
 .\venv\Scripts\Activate.ps1
 ```
 
+Configuração com .env.example: 
+
+O backend utiliza variáveis de ambiente para configurar banco de dados, chaves secretas e parâmetros de rede.
+Antes de rodar o servidor, copie o arquivo .env.example e ajuste conforme necessário:
+
+```bash
+cp .env.example .env
+```
+Edite o arquivo .env com suas credenciais e configurações locais.
+
 Instale as dependencias e inicie o servidor:
 
 ```bash
 uv sync
-fastapi dev src/main.py
+fastapi dev src/main.py --host 0.0.0.0 --port 8000
 ```
+
+App Mobile (Flutter):
+
+```bash
+cd flutter_application
+flutter pub get
+flutter run
+```
+O app mobile se conecta ao mesmo backend e permite que os usuários utilizem o chat em tempo real diretamente em seus dispositivos.
 
 ## Fluxo principal
 
@@ -74,3 +105,5 @@ A comunicacao em tempo real da aplicacao e feita com **WebSocket**.
 - Se o usuario perder conexao, o servidor envia um aviso de reconexao.
 - Mensagens nao entregues ficam em estado **pendente** ate confirmacao.
 - Em caso de falha, o cliente recebe rollback das mensagens nao enviadas.
+
+
