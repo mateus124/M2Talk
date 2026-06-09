@@ -1,5 +1,5 @@
-export const WS_BASE = 'ws://34.230.95.6:8000'
-export const API_BASE = 'http://34.230.95.6:8000'
+export const WS_BASE = 'ws://172.0.0.1:8000'
+export const API_BASE = 'http://127.0.0.1:8000'
 
 export const formatTime = (iso) => {
   const date = new Date(iso)
