@@ -1,20 +1,13 @@
 from sqlalchemy.orm import Session
+
 from repositories.group_repository import GroupRepository
 from repositories.user_repository import UserRepository
-from org.jgroups import JChannel, Message, ReceiverAdapter
 
 
-DEFAULT_GROUPS = ()
-
-
-class GroupReceiver(ReceiverAdapter):
-    def receive(self, msg: Message):
-        print(f"[Mensagem recebida] {msg.getObject()}")
+DEFAULT_GROUPS = ("geral", "turma", "projeto")
 
 
 class GroupService:
-    channels = {}
-
     @staticmethod
     def ensure_default_groups(db: Session) -> None:
         for group_name in DEFAULT_GROUPS:
@@ -29,12 +22,6 @@ class GroupService:
 
         group = GroupRepository.create_group(db, nome, created_by_user_id)
         GroupRepository.add_member(db, group.id, created_by_user_id)
-
-        channel = JChannel()
-        channel.setReceiver(GroupReceiver())
-        channel.connect(nome)
-        GroupService.channels[nome] = channel
-
         return group
 
     @staticmethod
@@ -48,11 +35,6 @@ class GroupService:
             raise ValueError(f"Grupo {group_name} não encontrado")
 
         if GroupRepository.is_member(db, group.id, user_id):
-            if group_name not in GroupService.channels:
-                channel = JChannel()
-                channel.setReceiver(GroupReceiver())
-                channel.connect(group_name)
-                GroupService.channels[group_name] = channel
             return group
 
         raise ValueError("Usuário não pode entrar no grupo sem convite")
@@ -70,9 +52,6 @@ class GroupService:
 
         if GroupRepository.count_members(db, group.id) == 0:
             GroupRepository.delete_group(db, group.id)
-            if group_name in GroupService.channels:
-                GroupService.channels[group_name].close()
-                del GroupService.channels[group_name]
 
         return group
 
@@ -105,11 +84,6 @@ class GroupService:
             raise ValueError("Apenas o criador do grupo pode excluir o grupo")
 
         member_ids = GroupRepository.delete_group(db, group.id)
-
-        if group_name in GroupService.channels:
-            GroupService.channels[group_name].close()
-            del GroupService.channels[group_name]
-
         return group, member_ids
 
     @staticmethod
@@ -131,24 +105,3 @@ class GroupService:
     @staticmethod
     def get_user_groups(db: Session, user_id: int):
         return GroupRepository.get_user_groups(db, user_id)
-
-    @staticmethod
-    def send_message_to_group(db: Session, group_name: str, sender_id: int, content: str):
-        group = GroupRepository.get_group_by_name(db, group_name)
-        if not group:
-            raise ValueError(f"Grupo {group_name} não encontrado")
-
-        if not GroupRepository.is_member(db, group.id, sender_id):
-            raise ValueError("Usuário não faz parte do grupo")
-
-        if group_name not in GroupService.channels:
-            channel = JChannel()
-            channel.setReceiver(GroupReceiver())
-            channel.connect(group_name)
-            GroupService.channels[group_name] = channel
-
-        channel = GroupService.channels[group_name]
-        message = Message(None, f"[User {sender_id}] {content}")
-        channel.send(message)
-
-        return f"Mensagem enviada ao grupo {group_name}"
